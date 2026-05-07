@@ -1,78 +1,72 @@
 import os
+import time
 import asyncio
 import random
 from datetime import datetime
 from typing import List
-from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from groq import Groq
 
-# Загружаем переменные окружения
-load_dotenv()
+# Задержка для хостинга
+time.sleep(5)
 
 # ========== КОНФИГУРАЦИЯ ==========
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")  # было os.getenv()
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")              # было os.getenv()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# Проверка токенов
 if not TELEGRAM_BOT_TOKEN:
-    print("❌ ОШИБКА: TELEGRAM_BOT_TOKEN не найден в .env файле!")
+    print("❌ ОШИБКА: TELEGRAM_BOT_TOKEN не найден")
     exit(1)
 
 if not GROQ_API_KEY:
-    print("❌ ОШИБКА: GROQ_API_KEY не найден в .env файле!")
+    print("❌ ОШИБКА: GROQ_API_KEY не найден")
     exit(1)
 
 print(f"✅ Токен загружен: {TELEGRAM_BOT_TOKEN[:15]}...")
 print(f"✅ API ключ загружен: {GROQ_API_KEY[:15]}...")
 
-# Файлы для хранения данных
+# Файлы
 CHATS_FILE = "subscribed_chats.txt"
 HISTORY_FILE = "affirmation_history.txt"
 
-# ========== ПРОМПТ ДЛЯ ГЕНЕРАЦИИ (БЕЗ ЗВЁЗДОЧЕК) ==========
+# ========== ПРОМПТ ==========
 AFFIRMATION_PROMPT = """ты создаёшь «аффирмашку дня» — короткое позитивное утверждение о себе.
 
 стиль:
-- первая буква предложения ЗАГЛАВНАЯ, остальные строчные (как в обычном тексте)
-- ироничное, забавное, прикольное, жизнеутверждающее
-- милое, с лёгкой пафосностью и абсурдным юмором
-- разрешено абсолютно всё: пицца, лягушки, левитация, стройность — всё что угодно!
+- первая буква предложения ЗАГЛАВНАЯ, остальные строчные
+- ироничное, забавное, жизнеутверждающее, кринжовое — что хочешь
+- темы любые, не ограничен
 
 формат:
-просто текст БЕЗ звёздочек, БЕЗ эмодзи, БЕЗ markdown
-в конце обязательно хэштег #аффирмашка_дня с новой строки
-
-длина: 15-60 слов
-не повторяй темы предыдущих аффирмашек
+просто текст без звёздочек, без эмодзи
+в конце придумай ОДИН хэштег по теме
 
 пример:
-Я левитирую над пиццей и каждая калория улетает в космос
+Мой начальник спит, а мои KPI растут сами собой
 
-#аффирмашка_дня"""
+#рабочаямагия
 
+не повторяй темы"""
+
+# Резервные аффирмашки
 FALLBACK_AFFIRMATIONS = [
-    "Я лечу над пиццей и каждая калория превращается в искру счастья\n\n#аффирмашка_дня",
-    "Моя стройность — это магия, а пицца — мой волшебный эликсир\n\n#аффирмашка_дня",
-    "Лягушки целуют меня в надежде превратиться в принцев, но я слишком хороша\n\n#аффирмашка_дня",
-    "Я ем пиццу каждый день и становлюсь только легче\n\n#аффирмашка_дня",
-    "Я левитирую над совещанием, и никто не замечает\n\n#аффирмашка_дня",
-    "Мой кот начал разговаривать и подтверждает мою гениальность\n\n#аффирмашка_дня",
-    "Я выигрываю в спорах, даже когда молчу\n\n#аффирмашка_дня"
+    "Мой начальник спит, а мои KPI растут сами собой\n\n#рабочеечудо",
+    "Я левитирую над совещанием, и никто не замечает\n\n#невидимка",
+    "Мой кот начал разговаривать и подтверждает мою гениальность\n\n#котофилософия",
+    "Я выигрываю в спорах, даже когда молчу\n\n#силатишины",
+    "Я высыпаюсь за 4 часа и чувствую себя отдохнувшим\n\n#сонсила",
+    "Деньги сами находят меня, даже когда я их не ищу\n\n#денежныйпоток"
 ]
 
-
-# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С ФАЙЛАМИ ==========
 def load_chats() -> List[int]:
     try:
         with open(CHATS_FILE, "r") as f:
             return [int(line.strip()) for line in f if line.strip()]
     except FileNotFoundError:
         return []
-
 
 def save_chat(chat_id: int):
     chats = load_chats()
@@ -83,7 +77,6 @@ def save_chat(chat_id: int):
                 f.write(f"{cid}\n")
         print(f"✅ Новый подписчик: {chat_id}")
 
-
 def remove_chat(chat_id: int):
     chats = load_chats()
     if chat_id in chats:
@@ -93,14 +86,12 @@ def remove_chat(chat_id: int):
                 f.write(f"{cid}\n")
         print(f"❌ Отписался: {chat_id}")
 
-
 def load_history() -> List[str]:
     try:
         with open(HISTORY_FILE, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
         return []
-
 
 def save_to_history(affirmation: str):
     history = load_history()
@@ -112,162 +103,113 @@ def save_to_history(affirmation: str):
         for item in history:
             f.write(f"{item}\n")
 
-
-# ========== ЛОГГИРОВАНИЕ ==========
-def log_user_action(user_id: int, first_name: str, username: str, action: str):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    name_display = f"{first_name} (@{username})" if username else f"{first_name}"
-    print(f"[{now}] 👤 {name_display} | ID: {user_id} | 📌 {action}")
-
-
-# ========== ГЕНЕРАЦИЯ АФФИРМАШКИ ==========
 async def generate_affirmation(groq_client: Groq) -> str:
     try:
         history = load_history()
         context = ""
         if history:
-            context = "ранее уже были темы (не повторяй их):\n" + "\n".join(f"- {h[:60]}" for h in history[-3:])
+            context = "не повторяй эти темы:\n" + "\n".join(f"- {h[:60]}" for h in history[-5:])
 
         response = groq_client.chat.completions.create(
             messages=[
                 {"role": "system", "content": AFFIRMATION_PROMPT + "\n\n" + context},
-                {"role": "user",
-                 "content": "напиши новую аффирмашку дня. без звёздочек, без эмодзи, без markdown. первая буква заглавная, остальные строчные. в конце #аффирмашка_дня."}
+                {"role": "user", "content": "напиши новую аффирмашку дня"}
             ],
             model="llama-3.3-70b-versatile",
             temperature=0.95,
-            max_tokens=150,
-            top_p=0.95
+            max_tokens=120
         )
         post = response.choices[0].message.content.strip()
-
-        # Убираем звёздочки, если они появились
         post = post.replace('*', '')
-
-        # Проверяем, что первая буква заглавная
+        
         if post and post[0].islower():
             post = post[0].upper() + post[1:]
-
-        # Убеждаемся, что хэштег есть
-        if "#аффирмашка_дня" not in post:
-            post += "\n\n#аффирмашка_дня"
-
+        
+        if '#' not in post:
+            post += "\n\n#аффирмашка"
+        
         return post
     except Exception as e:
-        print(f"❌ Ошибка генерации: {e}")
+        print(f"Ошибка генерации: {e}")
         return random.choice(FALLBACK_AFFIRMATIONS)
 
+def add_donation_button() -> InlineKeyboardMarkup:
+    """Добавляет кнопку доната с вероятностью 5%"""
+    if random.random() < 0.05:  # 5% вероятность
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="☕ Купить кофе автору", url="https://www.tbank.ru/cf/5hkmbahjfYd")],
+            [InlineKeyboardButton(text="✨ Получить ещё аффирмашку", callback_data="get_now")]
+        ])
+        return keyboard
+    else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✨ Получить ещё аффирмашку", callback_data="get_now")]
+        ])
+        return keyboard
 
-# ========== ОТПРАВКА ВСЕМ ПОДПИСЧИКАМ ==========
 async def send_daily_affirmation(bot: Bot):
-    print(f"\n{'=' * 50}")
-    print(f"🕐 [{datetime.now().strftime('%H:%M:%S')}] ЕЖЕДНЕВНАЯ РАССЫЛКА")
-    print(f"{'=' * 50}")
-
+    print(f"\n🕐 [{datetime.now()}] Ежедневная рассылка")
     groq_client = Groq(api_key=GROQ_API_KEY)
     affirmation = await generate_affirmation(groq_client)
     save_to_history(affirmation)
-
-    chats = load_chats()
-    if not chats:
-        print("⚠️ Нет подписчиков для рассылки")
-        return
-
-    print(f"📨 Отправляю {len(chats)} подписчикам...")
-    for chat_id in chats:
+    
+    keyboard = add_donation_button()
+    
+    for chat_id in load_chats():
         try:
-            # Отправляем без parse_mode (обычный текст)
-            await bot.send_message(chat_id, affirmation)
-            print(f"✅ Отправлено ID: {chat_id}")
+            await bot.send_message(chat_id, affirmation, reply_markup=keyboard)
             await asyncio.sleep(0.5)
         except Exception as e:
-            print(f"❌ Ошибка отправки {chat_id}: {e}")
-    print(f"{'=' * 50}\n")
+            print(f"Ошибка {chat_id}: {e}")
 
-
-# ========== КОМАНДЫ И КНОПКИ ==========
 async def cmd_start(message: Message):
-    user_id = message.from_user.id
-    first_name = message.from_user.first_name
-    username = message.from_user.username
-
-    log_user_action(user_id, first_name, username, "Нажал /start")
-
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подписаться на аффирмашки", callback_data="subscribe")],
+        [InlineKeyboardButton(text="✅ Подписаться", callback_data="subscribe")],
         [InlineKeyboardButton(text="❌ Отписаться", callback_data="unsubscribe")],
-        [InlineKeyboardButton(text="✨ Получить аффирмашку сейчас", callback_data="get_now")]
+        [InlineKeyboardButton(text="✨ Получить аффирмашку", callback_data="get_now")]
     ])
-
     await message.answer(
-        "✨ Привет! Я бот — Аффирмашка дня. ✨\n\n"
-        "Каждое утро в 8:30 я присылаю тебе ироничную и жизнеутверждающую аффирмашку.\n\n"
+        "✨ Аффирмашка дня ✨\n\n"
+        "Каждое утро в 8:30 по Москве.\n\n"
         "Выбери действие:",
         reply_markup=keyboard
     )
 
-
 async def callback_handler(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    first_name = callback.from_user.first_name
-    username = callback.from_user.username
-
+    
     if callback.data == "subscribe":
         save_chat(user_id)
-        log_user_action(user_id, first_name, username, "✅ Подписался на рассылку")
-        await callback.message.answer("✅ Ты подписался на аффирмашки! Жди в 8:30.")
-        await callback.answer()
-
+        await callback.message.answer("✅ Подписался! Жди в 8:30")
     elif callback.data == "unsubscribe":
         remove_chat(user_id)
-        log_user_action(user_id, first_name, username, "❌ Отписался от рассылки")
-        await callback.message.answer("❌ Ты отписался. Чтобы вернуться — напиши /start")
-        await callback.answer()
-
+        await callback.message.answer("❌ Отписался")
     elif callback.data == "get_now":
-        log_user_action(user_id, first_name, username, "✨ Запросил аффирмашку сейчас")
-        await callback.message.answer("🪄 Генерирую аффирмашку, минуточку...")
-
+        await callback.message.answer("🪄 Генерирую...")
         groq_client = Groq(api_key=GROQ_API_KEY)
         affirmation = await generate_affirmation(groq_client)
+        keyboard = add_donation_button()
+        await callback.message.answer(affirmation, reply_markup=keyboard)
+    await callback.answer()
 
-        # Отправляем без parse_mode
-        await callback.message.answer(affirmation)
-        await callback.answer()
-
-
-# ========== ЗАПУСК ==========
 async def main():
-    print(f"\n{'=' * 50}")
-    print(f"🚀 ЗАПУСК БОТА")
-    print(f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"⏰ Расписание: каждый день в 8:30")
-    print(f"{'=' * 50}\n")
-
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    await bot.delete_webhook(drop_pending_updates=True)
+    print("✅ Вебхук удалён")
+    
     dp = Dispatcher()
-
     dp.message.register(cmd_start, Command("start"))
     dp.callback_query.register(callback_handler)
-
+    
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(
-        send_daily_affirmation,
-        trigger="cron",
-        hour=8,
-        minute=30,
-        args=(bot,),
-        id="daily_affirmation"
-    )
+    scheduler.add_job(send_daily_affirmation, "cron", hour=8, minute=30, args=(bot,))
     scheduler.start()
-
-    print("✅ Бот успешно запущен и работает!")
-    print("📌 Команда: /start")
-    print("💡 Бот будет слать аффирмашки каждый день в 8:30")
-    print("⚠️ Компьютер должен быть включён в это время!\n")
-
+    
+    print("✅ Бот запущен!")
+    print("⏰ Рассылка каждый день в 8:30")
+    print("💸 Кнопка доната появляется с вероятностью 5%")
+    
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

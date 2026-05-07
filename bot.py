@@ -7,9 +7,10 @@ from datetime import datetime
 from typing import List, Dict
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from groq import Groq
+
 
 # Задержка для хостинга
 time.sleep(5)

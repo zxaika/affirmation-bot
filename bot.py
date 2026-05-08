@@ -9,7 +9,9 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from groq import Groq
+import pytz
 
 
 # Задержка для хостинга
@@ -18,7 +20,7 @@ time.sleep(5)
 # ========== КОНФИГУРАЦИЯ ==========
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))  # ← теперь из переменной окружения
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
 
 if not TELEGRAM_BOT_TOKEN:
     print("❌ ОШИБКА: TELEGRAM_BOT_TOKEN не найден")
@@ -240,18 +242,29 @@ async def send_affirmation_with_rating(bot: Bot, chat_id: int, affirmation: str,
     return affirmation_id
 
 async def send_daily_affirmation(bot: Bot):
-    print(f"\n🕐 [{datetime.now()}] Ежедневная рассылка")
+    """Отправляет аффирмашку в 9:00 по Москве"""
+    moscow_tz = pytz.timezone('Europe/Moscow')
+    pacific_tz = pytz.timezone('US/Pacific')
+    
+    print(f"🕐 [{datetime.now(moscow_tz).strftime('%Y-%m-%d %H:%M:%S')}] Запуск рассылки по МСК")
+    print(f"🕐 [{datetime.now(pacific_tz).strftime('%Y-%m-%d %H:%M:%S')}] Время на сервере (PST)")
+    
     groq_client = Groq(api_key=GROQ_API_KEY)
     affirmation = await generate_affirmation(groq_client)
     save_to_history(affirmation)
     
-    for chat_id in load_chats():
+    chats = load_chats()
+    print(f"📤 Отправляю {len(chats)} подписчикам...")
+    
+    for chat_id in chats:
         try:
             await send_affirmation_with_rating(bot, chat_id, affirmation)
             log_affirmation_to_user(chat_id, affirmation)
             await asyncio.sleep(0.5)
         except Exception as e:
             print(f"Ошибка {chat_id}: {e}")
+    
+    print(f"✅ Рассылка завершена в {datetime.now(moscow_tz).strftime('%H:%M:%S')} МСК")
 
 async def cmd_start(message: Message):
     first_name = message.from_user.first_name or ""
@@ -264,7 +277,7 @@ async def cmd_start(message: Message):
     ])
     await message.answer(
         "✨ Аффирмашка дня ✨\n\n"
-        "Каждое утро в 8:30 по Москве.\n\n"
+        "Каждое утро в 9:00 по Москве.\n\n"  # ← изменено на 9:00
         "Оценивай аффирмашки 👍👎\n"
         "Топ лучших — /top\n\n"
         "Выбери действие:",
@@ -282,7 +295,6 @@ async def cmd_top(message: Message):
     result = "🏆 *Топ лучших аффирмашек*\n\n"
     
     for i, (score, likes, dislikes, text) in enumerate(top, 1):
-        # Берём первую строку или первые 60 символов
         short_text = text.split('\n')[0][:60]
         if len(text.split('\n')[0]) > 60:
             short_text += "..."
@@ -319,11 +331,13 @@ async def callback_handler(callback: CallbackQuery):
         first_name = callback.from_user.first_name or ""
         username = callback.from_user.username or ""
         save_chat(user_id, first_name, username)
-        await callback.message.answer("✅ Подписался! Жди в 8:30")
+        await callback.message.answer("✅ Подписался! Жди в 9:00")  # ← изменено
+        await callback.answer()
     
     elif data == "unsubscribe":
         remove_chat(user_id)
         await callback.message.answer("❌ Отписался")
+        await callback.answer()
     
     elif data == "get_now":
         await callback.message.answer("🪄 Генерирую...")
@@ -331,11 +345,10 @@ async def callback_handler(callback: CallbackQuery):
         affirmation = await generate_affirmation(groq_client)
         await send_affirmation_with_rating(callback.bot, user_id, affirmation)
         log_affirmation_to_user(user_id, affirmation)
+        await callback.answer()
     
     elif data.startswith("like_"):
         affirmation_id = data[5:]
-        # В реальности нужно хранить соответствие id -> текст
-        # Пока просто считаем
         add_rating(affirmation_id, 1)
         await callback.answer("👍 Спасибо за оценку!")
     
@@ -343,8 +356,6 @@ async def callback_handler(callback: CallbackQuery):
         affirmation_id = data[8:]
         add_rating(affirmation_id, -1)
         await callback.answer("👎 Спасибо за честность!")
-    
-    await callback.answer()
 
 async def main():
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -357,16 +368,37 @@ async def main():
     dp.message.register(cmd_stats, Command("stats"))
     dp.callback_query.register(callback_handler)
     
-    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(send_daily_affirmation, "cron", hour=8, minute=30, args=(bot,))
+    # Указываем московское время для планировщика
+    moscow_tz = pytz.timezone('Europe/Moscow')
+    
+    # ========== КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ==========
+    # Отправка в 9:00 по МСК на сервере в US West California
+    scheduler = AsyncIOScheduler(timezone=moscow_tz)
+    
+    # Добавляем задачу на 9:00 по МСК
+    scheduler.add_job(
+        send_daily_affirmation,
+        CronTrigger(hour=9, minute=0, timezone=moscow_tz),  # ← 9:00 МСК
+        args=(bot,),
+        id="daily_affirmation"
+    )
+    # ==========================================
+    
     scheduler.start()
     
     print("✅ Бот запущен!")
-    print("⏰ Рассылка каждый день в 8:30")
+    print(f"🕐 Текущее время по МСК: {datetime.now(moscow_tz).strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🕐 Текущее время на сервере (PST): {datetime.now(pytz.timezone('US/Pacific')).strftime('%Y-%m-%d %H:%M:%S')}")
+    print("⏰ Рассылка каждый день в 9:00 по Москве")
     print("👍👎 У аффирмашек есть кнопки оценки")
     print("🏆 Команда /top — топ лучших аффирмашек")
     print("👑 Команда /stats — статистика (только админ)")
     
+    # Проверим все запланированные задачи
+    jobs = scheduler.get_jobs()
+    for job in jobs:
+        print(f"📅 Запланировано: {job.next_run_time}")
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
